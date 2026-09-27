@@ -5,9 +5,9 @@ import constantsRoutes from './src/routes/constants.js';
 import historyRoutes from './src/routes/history.js';
 
 const app = express();
-const PORT = Number(process.env.PORT) || 4000;
 const HOST = process.env.HOST || '0.0.0.0';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
+const initialPort = Number(process.env.PORT) || 4000;
 
 app.use(
   cors(
@@ -20,6 +20,14 @@ app.use(
   )
 );
 app.use(express.json());
+
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    app: 'NUMERICA',
+    message: 'Backend is running. Use the API routes under /api or serve the frontend separately.'
+  });
+});
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
@@ -35,6 +43,21 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error.' });
 });
 
-app.listen(PORT, HOST, () => {
-  console.log(`NUMERICA backend running on http://${HOST}:${PORT}`);
-});
+const startServer = (port) => {
+  const server = app.listen(port, HOST, () => {
+    console.log(`NUMERICA backend running on http://${HOST}:${port}`);
+  });
+
+  server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      const nextPort = port + 1;
+      console.warn(`Port ${port} is busy. Retrying on ${nextPort}.`);
+      startServer(nextPort);
+      return;
+    }
+
+    throw error;
+  });
+};
+
+startServer(initialPort);

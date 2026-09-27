@@ -44,6 +44,22 @@ const parseNumber = (value, label = 'Value') => {
   return Number(value);
 };
 const num = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+
+async function requestCalculation(moduleName, payload) {
+  const response = await fetch(`${API_BASE}/api/calculate/${moduleName}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Calculation failed.');
+  }
+
+  return data.result ?? data;
+}
 
 function factorial(n) {
   if (!Number.isInteger(n) || n < 0 || n > 170) throw Error('Use an integer from 0 to 170.');
@@ -245,13 +261,23 @@ const convertUnits = {
 function Calculator({ scientific = false, onSave }) {
   const [value, setValue] = React.useState('');
   const [degrees, setDegrees] = React.useState(true);
-  const calculate = () => {
+  const calculate = async () => {
     try {
-      const result = evaluate(value, degrees);
-      onSave(value, result);
-      setValue(fmt(result));
+      const result = await requestCalculation(scientific ? 'scientific' : 'basic', {
+        expression: value,
+        degrees
+      });
+      const resultText = typeof result === 'string' ? result : String(result);
+      onSave(value, resultText);
+      setValue(resultText);
     } catch (e) {
-      setValue(e.message);
+      try {
+        const result = evaluate(value, degrees);
+        onSave(value, result);
+        setValue(fmt(result));
+      } catch (err) {
+        setValue(err.message || e.message || 'Calculation failed.');
+      }
     }
   };
   const add = v => setValue(s => s.startsWith('Check') || s.startsWith('Invalid') || s.includes('requires') || s.includes('Division') || s.includes('integer') ? v : s + v);
@@ -289,13 +315,20 @@ function Expression({ onSave }) {
   const [text, setText] = React.useState('2*sin(30)+sqrt(25)');
   const [x, setX] = React.useState('2');
   const [result, setResult] = React.useState('—');
-  const run = () => {
+  const run = async () => {
     try {
-      const r = evaluate(text, true, 0, num(x));
-      setResult(fmt(r));
-      onSave(text, r);
+      const r = await requestCalculation('expression', { expression: text, x: num(x) });
+      const resultText = typeof r === 'string' ? r : String(r);
+      setResult(resultText);
+      onSave(text, resultText);
     } catch (e) {
-      setResult(e.message);
+      try {
+        const r = evaluate(text, true, 0, num(x));
+        setResult(fmt(r));
+        onSave(text, r);
+      } catch (err) {
+        setResult(err.message || e.message || 'Calculation failed.');
+      }
     }
   };
   return (
@@ -444,7 +477,27 @@ function AdvancedFeature({ tool, onSave }) {
     if (value === '' || value === undefined || !Number.isFinite(Number(value))) throw Error(`Value ${i + 1} must be a finite number.`);
     return Number(value);
   };
-  const calculate = () => {
+  const calculate = async () => {
+    try {
+      const payload = (() => {
+        const id = tool.id;
+        if (id === 'algebra') return { option, values: values.map(v => v === '' ? 0 : Number(v)) };
+        if (id === 'matrix') return { option, matrixA, matrixB };
+        if (id === 'number') return { option, values: values.map(v => v === '' ? 0 : Number(v)) };
+        if (id === 'geometry') return { option, values: values.map(v => v === '' ? 0 : Number(v)) };
+        if (id === 'physics') return { option, values: values.map(v => v === '' ? 0 : Number(v)) };
+        return { option, values: values.map(v => v === '' ? 0 : Number(v)) };
+      })();
+
+      const result = await requestCalculation(tool.id, payload);
+      const resultText = typeof result === 'string' ? result : JSON.stringify(result);
+      setResult(resultText);
+      onSave(`${tool.label}: ${option}`, resultText);
+      return;
+    } catch (e) {
+      // fallback to local logic for environments without a backend
+    }
+
     try {
       let r;
       const id = tool.id;
@@ -480,7 +533,6 @@ function AdvancedFeature({ tool, onSave }) {
         const needsB = ['Addition', 'Subtraction', 'Multiplication', 'Solve Ax=b'].includes(op);
         const B = needsB ? parseMatrix(matrixB) : null;
         if (op === 'Transpose') {
-          const cols = A[0].length;
           r = matrixText(A[0].map((_, j) => A.map(row => row[j])));
         } else if (op === 'Determinant') {
           if (A.length !== A[0].length) throw Error('Matrix must be square.');
@@ -677,7 +729,29 @@ function Feature({ tool, onSave }) {
   };
   React.useEffect(() => { setOption(optionSets[tool.id][0]); setResult('—'); }, [tool.id]);
 
-  const calculate = () => {
+  const calculate = async () => {
+    try {
+      const payload = (() => {
+        const id = tool.id;
+        if (id === 'chemistry') return { option, values: values.map(v => v === '' ? 0 : Number(v)), sequence: text };
+        if (id === 'biology') return { option, values: values.map(v => v === '' ? 0 : Number(v)), sequence: text };
+        if (id === 'finance') return { option, values: values.map(v => v === '' ? 0 : Number(v)) };
+        if (id === 'units') return { category: unitCat, from, to, value: Number(values[0] || 0) };
+        if (id === 'programmer') return { option, values: values.map(v => v === '' ? 0 : Number(v)), text };
+        if (id === 'complex') return { option, values: values.map(v => v === '' ? 0 : Number(v)) };
+        if (id === 'calculus') return { option, expression: text, values: values.map(v => v === '' ? 0 : Number(v)) };
+        return { option, values: values.map(v => v === '' ? 0 : Number(v)) };
+      })();
+
+      const result = await requestCalculation(tool.id, payload);
+      const resultText = typeof result === 'string' ? result : JSON.stringify(result);
+      setResult(resultText);
+      onSave(`${tool.label}: ${option}`, resultText);
+      return;
+    } catch (e) {
+      // fallback to local evaluation when the backend is unavailable
+    }
+
     try {
       let r, label = `${tool.label}: ${option}`;
       const x = v(0), y = v(1), z = v(2), w = v(3);
@@ -991,14 +1065,30 @@ function Feature({ tool, onSave }) {
 export default function App() {
   const [active, setActive] = React.useState('basic');
   const [history, setHistory] = React.useState([]);
+  React.useEffect(() => {
+    fetch(`${API_BASE}/api/history?limit=100`)
+      .then(res => res.ok ? res.json() : { history: [] })
+      .then(({ history: entries }) => {
+        setHistory(entries.map(entry => ({ expression: entry.expression, result: entry.result })));
+      })
+      .catch(() => setHistory([]));
+  }, []);
   const save = (expression, result) => setHistory(h => [{ expression, result: String(result) }, ...h].slice(0, 100));
+  const clearHistory = async () => {
+    try {
+      await fetch(`${API_BASE}/api/history`, { method: 'DELETE' });
+    } catch (error) {
+      // ignore backend issues and clear local state
+    }
+    setHistory([]);
+  };
   const tool = tools.find(t => t.id === active);
   let content;
   if (['basic', 'scientific'].includes(active)) content = <Calculator scientific={active === 'scientific'} onSave={save} />;
   else if (active === 'expression') content = <Expression onSave={save} />;
   else if (active === 'statistics') content = <Statistics onSave={save} />;
   else if (active === 'constants') content = <Constants />;
-  else if (active === 'history') content = <History history={history} onClear={() => setHistory([])} />;
+  else if (active === 'history') content = <History history={history} onClear={clearHistory} />;
   else if (['algebra', 'matrix', 'number', 'geometry', 'physics'].includes(active)) content = <AdvancedFeature tool={tool} onSave={save} />;
   else content = <Feature tool={tool} onSave={save} />;
   return (
