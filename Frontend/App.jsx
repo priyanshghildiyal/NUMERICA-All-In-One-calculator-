@@ -268,7 +268,7 @@ function Calculator({ scientific = false, onSave }) {
         degrees
       });
       const resultText = typeof result === 'string' ? result : String(result);
-      onSave(value, resultText);
+      onSave(value, resultText, true);
       setValue(resultText);
     } catch (e) {
       try {
@@ -320,7 +320,7 @@ function Expression({ onSave }) {
       const r = await requestCalculation('expression', { expression: text, x: num(x) });
       const resultText = typeof r === 'string' ? r : String(r);
       setResult(resultText);
-      onSave(text, resultText);
+      onSave(text, resultText, true);
     } catch (e) {
       try {
         const r = evaluate(text, true, 0, num(x));
@@ -398,7 +398,22 @@ function Statistics({ onSave }) {
           </Col>
         ))}
       </Row>
-      <Button className="mt-3" onClick={() => onSave('Statistics dataset', mean)}>Save calculation</Button>
+      <Button className="mt-3" disabled={invalid || !len}
+        onClick={() => onSave('Statistics dataset', JSON.stringify({
+          count: len,
+          mean: fmt(mean),
+          median: fmt(median),
+          mode,
+          populationVariance: fmt(variance),
+          sampleVariance: fmt(sampleVariance),
+          populationStdDev: fmt(popStd),
+          sampleStdDev: fmt(sampleStd),
+          range: fmt(range),
+          q1: fmt(q1),
+          q3: fmt(q3),
+          min: fmt(sorted[0]),
+          max: fmt(sorted[len - 1])
+        }))}>Save calculation</Button>
     </Panel>
   );
 }
@@ -424,22 +439,25 @@ function Constants() {
 }
 
 // ---------- HISTORY ----------
-function History({ history, onClear }) {
+function History({ history, onClear, loading, clearing }) {
   return (
-    <Panel title="Calculation History" subtitle="Your saved results remain available during this session.">
-      {history.length ? (
+    <Panel title="Calculation History" subtitle="Saved results remain available across sessions.">
+      {loading ? <div className="empty-state">Loading saved calculations…</div> : null}
+      {!loading && history.length ? (
         <>
           {history.map((h, i) => (
-            <div className="history-line" key={i}>
+            <div className="history-line" key={h.id ?? `${h.expression}-${i}`}>
               <span>{h.expression}</span>
               <strong>{h.result}</strong>
             </div>
           ))}
-          <Button variant="outline-danger" className="mt-3" onClick={onClear}>Clear history</Button>
+          <Button variant="outline-danger" className="mt-3" disabled={clearing} onClick={onClear}>
+            {clearing ? 'Clearing…' : 'Clear history'}
+          </Button>
         </>
-      ) : (
+      ) : !loading ? (
         <div className="empty-state">No calculations saved yet. Use any workspace to create history.</div>
-      )}
+      ) : null}
     </Panel>
   );
 }
@@ -492,7 +510,7 @@ function AdvancedFeature({ tool, onSave }) {
       const result = await requestCalculation(tool.id, payload);
       const resultText = typeof result === 'string' ? result : JSON.stringify(result);
       setResult(resultText);
-      onSave(`${tool.label}: ${option}`, resultText);
+      onSave(`${tool.label}: ${option}`, resultText, true);
       return;
     } catch (e) {
       // fallback to local logic for environments without a backend
@@ -746,7 +764,7 @@ function Feature({ tool, onSave }) {
       const result = await requestCalculation(tool.id, payload);
       const resultText = typeof result === 'string' ? result : JSON.stringify(result);
       setResult(resultText);
-      onSave(`${tool.label}: ${option}`, resultText);
+      onSave(`${tool.label}: ${option}`, resultText, true);
       return;
     } catch (e) {
       // fallback to local evaluation when the backend is unavailable
@@ -1065,22 +1083,64 @@ function Feature({ tool, onSave }) {
 export default function App() {
   const [active, setActive] = React.useState('basic');
   const [history, setHistory] = React.useState([]);
+  const [historyLoading, setHistoryLoading] = React.useState(true);
+  const [historyClearing, setHistoryClearing] = React.useState(false);
+  const [historyError, setHistoryError] = React.useState('');
   React.useEffect(() => {
+    let active = true;
     fetch(`${API_BASE}/api/history?limit=100`)
-      .then(res => res.ok ? res.json() : { history: [] })
-      .then(({ history: entries }) => {
-        setHistory(entries.map(entry => ({ expression: entry.expression, result: entry.result })));
+      .then(async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Could not load calculation history.');
+        return data;
       })
-      .catch(() => setHistory([]));
+      .then(({ history: entries }) => {
+        if (active) setHistory(entries);
+      })
+      .catch(error => {
+        if (active) setHistoryError(`Could not load saved calculation history: ${error.message}`);
+      })
+      .finally(() => {
+        if (active) setHistoryLoading(false);
+      });
+    return () => { active = false; };
   }, []);
-  const save = (expression, result) => setHistory(h => [{ expression, result: String(result) }, ...h].slice(0, 100));
-  const clearHistory = async () => {
-    try {
-      await fetch(`${API_BASE}/api/history`, { method: 'DELETE' });
-    } catch (error) {
-      // ignore backend issues and clear local state
+  const save = async (expression, result, alreadyPersisted = false) => {
+    const entry = { expression, result: String(result) };
+    if (alreadyPersisted) {
+      setHistory(h => [entry, ...h].slice(0, 100));
+      setHistoryError('');
+      return;
     }
-    setHistory([]);
+
+    try {
+      const response = await fetch(`${API_BASE}/api/history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry)
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not save calculation history.');
+      setHistory(h => [data.history, ...h].slice(0, 100));
+      setHistoryError('');
+    } catch (error) {
+      setHistory(h => [entry, ...h].slice(0, 100));
+      setHistoryError(`Calculation completed, but could not be saved to backend history: ${error.message}`);
+    }
+  };
+  const clearHistory = async () => {
+    setHistoryClearing(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/history`, { method: 'DELETE' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not clear calculation history.');
+      setHistory([]);
+      setHistoryError('');
+    } catch (error) {
+      setHistoryError(`Could not clear saved calculation history: ${error.message}`);
+    } finally {
+      setHistoryClearing(false);
+    }
   };
   const tool = tools.find(t => t.id === active);
   let content;
@@ -1088,7 +1148,8 @@ export default function App() {
   else if (active === 'expression') content = <Expression onSave={save} />;
   else if (active === 'statistics') content = <Statistics onSave={save} />;
   else if (active === 'constants') content = <Constants />;
-  else if (active === 'history') content = <History history={history} onClear={clearHistory} />;
+  else if (active === 'history') content = <History history={history} onClear={clearHistory}
+    loading={historyLoading} clearing={historyClearing} />;
   else if (['algebra', 'matrix', 'number', 'geometry', 'physics'].includes(active)) content = <AdvancedFeature tool={tool} onSave={save} />;
   else content = <Feature tool={tool} onSave={save} />;
   return (
@@ -1131,8 +1192,9 @@ export default function App() {
             <span className="active-dot" /> Module {String(tool.number).padStart(2, '0')} / 18 <strong>{tool.label}</strong>
           </div>
           {content}
+          {historyError && <Alert variant="warning" className="mt-4">{historyError}</Alert>}
           <Alert variant="light" className="mt-4 border-0 small text-secondary">
-            <strong>Tip:</strong> Results are saved automatically to Calculation History. All calculations run locally in your browser.
+            <strong>Tip:</strong> Successful calculations are saved to backend history. Local fallback calculations are saved when the backend is available.
           </Alert>
         </Container>
       </main>

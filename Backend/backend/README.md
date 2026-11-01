@@ -7,7 +7,7 @@ local SQLite file (`data/numerica.db`).
 ## Setup
 
 ```bash
-cd backend
+cd Backend/backend
 npm install
 npm start          # runs on http://localhost:4000
 # or, for auto-restart on changes:
@@ -92,51 +92,15 @@ Deletes one entry.
 ### `DELETE /api/history`
 Clears all history.
 
-## Wiring it into the React frontend
+## Frontend integration
 
-The frontend currently computes everything client-side and keeps history in
-React state (`App.jsx`, `useState`). To use this backend instead, the
-simplest integration is:
+The React frontend calls `POST /api/calculate/:module` for calculations. These
+requests save history automatically unless the body includes `"save": false`.
+Client-side fallback calculations and the Statistics module use `POST
+/api/history` to persist their results. The history view loads from
+`GET /api/history` on startup, and clearing history calls `DELETE /api/history`.
 
-1. Keep the UI and state exactly as-is.
-2. In each module's `calculate()` handler, replace the local logic call with
-   a `fetch` to the matching endpoint, e.g.:
-
-```js
-const calculate = async () => {
-  try {
-    const res = await fetch('http://localhost:4000/api/calculate/algebra', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ option, values })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    setResult(data.result);
-  } catch (e) {
-    setResult(e.message);
-  }
-};
-```
-
-3. For persistent history across sessions, load it on mount instead of
-   starting from `[]`:
-
-```js
-React.useEffect(() => {
-  fetch('http://localhost:4000/api/history')
-    .then(r => r.json())
-    .then(({ history }) =>
-      setHistory(history.map(h => ({ expression: h.expression, result: h.result })))
-    );
-}, []);
-```
-
-   and call `DELETE /api/history` instead of just clearing local state in
-   `onClear`.
-
-4. For local dev, put the API's base URL in a `.env` (e.g. Vite's
-   `VITE_API_URL`) instead of hardcoding `http://localhost:4000`.
-
-This keeps the change small and incremental — you can migrate one module at a
-time, since every module's request shape mirrors its existing UI state.
+For local development, the Vite config proxies `/api` to
+`http://localhost:4000`. Set `VITE_API_URL` in `Frontend/.env` only when the
+backend is hosted at a different base URL. Start the frontend separately with
+`npm run dev` from `Frontend/`.
